@@ -6,7 +6,43 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
     header("Location: login.php");
     exit;
 }
+
+
+$checkInTime = $_SESSION["user"]["checked_in_time"] ?? null;
+$checkOut = $_SESSION["user"]["checked_out"] ?? "";
+$checkOutTime = $_SESSION["user"]["checked_out_time"] ?? "";
+
+
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// no user = not logged in
+if (empty($_SESSION["user"])) {
+    // redirect to login or return unauthorized
+    header("Location: login.php");
+    exit;
+}
+
+// check custom timeout
+$createdAt = $_SESSION["created_at"] ?? 0;
+$lifetime = $_SESSION["session_lifetime"] ?? (6 * 60 * 60);
+
+if (time() - $createdAt > $lifetime) {
+    // session expired: clear and destroy
+    session_unset();
+    session_destroy();
+    // redirect to login
+    header("Location: login.php");
+    exit;
+}
+
+
+
 ?>
+
+
 
 <!DOCTYPE html>
 <html lang="en">
@@ -360,15 +396,10 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
 
                 <!-- NEW: Check In / Check Out Buttons -->
                 <div class="d-flex gap-2">
-
-
                     <?php
                     $checkedIn = $_SESSION["user"]["checked_in"] ?? "N";
                     $checkedOut = $_SESSION["user"]["checked_out"] ?? "N";
-                    $total_working_minutes = $_SESSION["user"]["total_working_minutes"] ?? 0;
                     ?>
-
-
 
                     <!-- SHOW CHECK-IN -->
                     <?php if ($checkedIn === "N") { ?>
@@ -385,10 +416,8 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
                         <!-- CHECKED-IN & CHECKED-OUT → Show Nothing -->
                     <?php } else { ?>
                         <!-- Optionally show a message -->
-                        <span class="badge bg-secondary"><?php echo $total_working_minutes; ?> minutes</span>
+                        <!-- <span class="badge bg-secondary">minutes</span> -->
                     <?php } ?>
-
-
 
                 </div>
 
@@ -408,8 +437,10 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
                             $use_name = "Not Logged In";
                         }
                         ?>
-
                         <?php echo $use_name; ?>
+                        <br>
+
+                        <span id="total_working_display"> </span>
                     </span>
                     <!-- <span class="d-block small text-success" style="font-size: 0.65rem;">Online</span> -->
                 </div>
@@ -473,9 +504,20 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
                                     </select>
                                 </div>
 
+                                <div class="mb-3">
+                                    <label class="form-label">Project Duration</label>
+                                    <div class="input-group">
+                                        <input type="text" class="form-control" id="projectTime" readonly
+                                            disabled="true">
+
+                                    </div>
+                                </div>
+
                                 <!-- Start Time -->
                                 <div class="mb-3">
-                                    <label class="form-label">Start Time</label>
+                                    <label class="form-label">Start Time <span id="time_alert_error"
+                                            class="text-danger fw-bold"></span>
+                                    </label>
                                     <div class="input-group">
                                         <input type="datetime-local" class="form-control" id="startTime" required>
                                         <button class="btn btn-outline-secondary" type="button"
@@ -501,7 +543,8 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
                                 </div>
 
                                 <div class="d-grid gap-2">
-                                    <button type="submit" id="timeFormSubmitBtn" class="btn btn-primary btn-primary-custom">
+                                    <button type="submit" id="timeFormSubmitBtn"
+                                        class="btn btn-primary btn-primary-custom">
                                         <i class="bi bi-plus-circle me-2"></i>Add Entry
                                     </button>
 
@@ -690,7 +733,8 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
     <script>
         let projectList = [];
         let currentPage = 1;
-        let limit = 5;
+
+        let limit = 10;
         let myChart = null;
         let projectColors = {};
 
@@ -700,7 +744,7 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
         const getRandomColor = () => '#' + Math.floor(Math.random() * 16777215).toString(16);
 
 
-        document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('DOMContentLoaded', function () {
             fetch_project();
             fetchGraphData();
         });
@@ -714,7 +758,7 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
         }
 
 
-        document.getElementById('createProjectForm').addEventListener('submit', async function(e) {
+        document.getElementById('createProjectForm').addEventListener('submit', async function (e) {
             e.preventDefault();
 
             document.getElementById('projectSubmitBtn').disabled = true; // Disable button to prevent multiple submissions
@@ -756,20 +800,20 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
             }
         });
 
-      
-      
-      
+
+
+
         function fetch_project() {
             fetch("api/Projects.php", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    credentials: "include",
-                    body: JSON.stringify({
-                        function: "fetch_projects_name"
-                    })
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                credentials: "include",
+                body: JSON.stringify({
+                    function: "fetch_projects_name"
                 })
+            })
                 .then(res => res.json())
                 .then(response => {
                     if (response.status && response.data) {
@@ -814,7 +858,96 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
 
         }
 
-        document.getElementById('timeForm').addEventListener('submit', async function(e) {
+
+
+        let restrict_time = "";
+
+        /* -------------------------------
+           FETCH RESTRICT TIME ON PROJECT CHANGE
+        -------------------------------- */
+        document.getElementById('projectSelect').addEventListener('change', () => {
+            let project_id = document.getElementById('projectSelect').value;
+
+            fetch("api/Projects.php", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({
+                    function: "fetch_projects_spend_time",
+                    project_id: project_id
+                })
+            })
+                .then(res => res.json())
+                .then(response => {
+                    restrict_time = response.restrict_time || "";
+                    formatReadableTime(response.restrict_time);
+
+                    document.getElementById('projectTime').value = response.duration || "";
+
+                    applyRestrictTime(); // Apply time restrictions after fetching
+                })
+                .catch(err => {
+                    console.log("ERROR:", err);
+                });
+        });
+
+
+        // Convert restrict_time to readable format
+        function formatReadableTime(timeString) {
+            if (!timeString) return "";
+
+
+
+
+            // Assign restrict time from API
+            restrict_time = timeString || "";
+
+            const msgBox = document.getElementById('time_alert_error');
+
+            // CASE 1 — No restriction
+            if (restrict_time === "") {
+                msgBox.innerHTML = "";
+            }
+
+            // CASE 2 — Not checked in
+            else if (restrict_time === "NOT_CHECKED_IN") {
+                msgBox.innerHTML = `
+        <span class="text-danger fw-bold">
+            You have not checked in today.
+        </span>`;
+            }
+
+            // CASE 3 — First log allowed
+            else if (restrict_time === "ALLOW") {
+                msgBox.innerHTML = `
+        <span class="text-success fw-bold">
+            You can start logging time now.
+        </span>`;
+            }
+
+            // CASE 4 — Restriction exists → show readable time
+            else {
+                let readable = extractTime(timeString);
+
+                msgBox.innerHTML = `
+        <span class="text-danger fw-bold">
+            Please select time <b>after ${readable}</b>.
+        </span>`;
+            }
+
+        }
+
+
+
+        function extractTime(timeString) {
+            if (!timeString || typeof timeString !== "string") return "";
+            // Split by space → ["2025-12-03", "11:40:00"]
+            let parts = timeString.split(" ");
+            return parts[1] || ""; // return only time portion
+        }
+
+
+        document.getElementById('timeForm').addEventListener('submit', async function (e) {
             e.preventDefault();
 
             document.getElementById('timeFormSubmitBtn').disabled = true; // Disable button to prevent multiple submissions
@@ -1011,16 +1144,16 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
 
 
             fetch("api/Projects.php", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    credentials: "include",
-                    body: JSON.stringify({
-                        function: "fetch_attendance",
-                        month: selectedMonth
-                    })
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                credentials: "include",
+                body: JSON.stringify({
+                    function: "fetch_attendance",
+                    month: selectedMonth
                 })
+            })
                 .then(res => res.json())
                 .then(response => {
                     if (response.status && response.data) {
@@ -1098,21 +1231,21 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
             const offset = (page - 1) * limit;
 
             fetch("api/Projects.php", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    credentials: "include",
-                    body: JSON.stringify({
-                        function: "fetch_all_activity_logs",
-                        startTime: startTime,
-                        endTime: endTime,
-                        limit: limit,
-                        offset: offset,
-                        startTime: startTime.value,
-                        endTime: endTime.value
-                    })
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                credentials: "include",
+                body: JSON.stringify({
+                    function: "fetch_all_activity_logs",
+                    startTime: startTime,
+                    endTime: endTime,
+                    limit: limit,
+                    offset: offset,
+                    startTime: startTime.value,
+                    endTime: endTime.value
                 })
+            })
                 .then(res => res.json())
                 .then(response => {
                     if (response.status) {
@@ -1148,7 +1281,7 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
                         </button>
                 </td>
             </tr>`;
-            
+
                 tbody.insertAdjacentHTML('beforeend', row);
             });
         }
@@ -1231,17 +1364,17 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
         function fetchGraphData() {
 
             fetch("api/Projects.php", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    credentials: "include",
-                    body: JSON.stringify({
-                        function: "fetch_graph_data",
-                        startTime: startTime.value,
-                        endTime: endTime.value
-                    })
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                credentials: "include",
+                body: JSON.stringify({
+                    function: "fetch_graph_data",
+                    startTime: startTime.value,
+                    endTime: endTime.value
                 })
+            })
                 .then(res => res.json())
                 .then(response => {
                     if (response.status && Array.isArray(response.data)) {
@@ -1298,7 +1431,7 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
 
 
         document.addEventListener('DOMContentLoaded', () => {
-            getGeotag();
+            // getGeotag();
         });
 
         let latitude = '';
@@ -1324,10 +1457,10 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
                     console.error(error);
                     alert("Unable to get your current location. Please enable GPS.");
                 }, {
-                    enableHighAccuracy: true,
-                    timeout: 7000,
-                    maximumAge: 0
-                }
+                enableHighAccuracy: true,
+                timeout: 7000,
+                maximumAge: 0
+            }
             );
         }
 
@@ -1335,7 +1468,7 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
 
 
 
-        function deleteEntry(id){
+        function deleteEntry(id) {
 
             if (!confirm("Are you sure you want to delete this entry?")) {
                 return;
@@ -1350,19 +1483,19 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
                     entry_id: id
                 })
             })
-            .then(res => res.json())
-            .then(response => {
-                if (response.status) {
-                    alert("Entry deleted successfully.");
-                    fetch_all_activity(currentPage); // Refresh current page
-                } else {
-                    alert("Failed to delete entry.");
-                }
-            })
-            .catch(err => {
-                console.error("DELETE ERROR:", err);
-                alert("Error deleting entry.");
-            });
+                .then(res => res.json())
+                .then(response => {
+                    if (response.status) {
+                        alert("Entry deleted successfully.");
+                        fetch_all_activity(currentPage); // Refresh current page
+                    } else {
+                        alert("Failed to delete entry.");
+                    }
+                })
+                .catch(err => {
+                    console.error("DELETE ERROR:", err);
+                    alert("Error deleting entry.");
+                });
         }
 
 
@@ -1372,17 +1505,17 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
         function checkIn() {
 
             fetch("api/login.php", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    credentials: "include",
-                    body: JSON.stringify({
-                        function: "check_in",
-                        latitude: latitude,
-                        longitude: longitude
-                    })
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                credentials: "include",
+                body: JSON.stringify({
+                    function: "check_in",
+                    latitude: latitude,
+                    longitude: longitude
                 })
+            })
                 .then(res => res.json())
                 .then(response => {
                     alert(response.message);
@@ -1398,17 +1531,17 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
         function checkOut() {
 
             fetch("api/login.php", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    credentials: "include",
-                    body: JSON.stringify({
-                        function: "check_out",
-                        latitude: latitude,
-                        longitude: longitude
-                    })
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                credentials: "include",
+                body: JSON.stringify({
+                    function: "check_out",
+                    latitude: latitude,
+                    longitude: longitude
                 })
+            })
                 .then(res => res.json())
                 .then(response => {
                     alert(response.message);
@@ -1427,15 +1560,15 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
 
             if (confirm("Are you sure you want to logout?")) {
                 fetch("api/login.php", {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json"
-                        },
-                        credentials: "include",
-                        body: JSON.stringify({
-                            function: "logout"
-                        })
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    credentials: "include",
+                    body: JSON.stringify({
+                        function: "logout"
                     })
+                })
                     .then(res => res.json())
                     .then(response => {
                         if (response.status) {
@@ -1488,58 +1621,179 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
         }
 
 
+        /* ----------------------------------------------------
+           APPLY RESTRICT TIME RULES (MAIN FUNCTION)
+        -----------------------------------------------------*/
+        function applyRestrictTime() {
+            const startInput = document.getElementById("startTime");
+            const endInput = document.getElementById("endTime");
 
+            console.log("Restrict Time:", restrict_time);
 
-        window.onload = function() {
-            restrictToToday("startTime");
-            restrictToToday("endTime");
-        };
+            /* ----------------------------------------------------
+               1️⃣ USER NOT CHECKED IN TODAY
+            -----------------------------------------------------*/
+            if (restrict_time === "NOT_CHECKED_IN") {
+                startInput.value = "";
+                endInput.value = "";
+                startInput.disabled = true;
+                endInput.disabled = true;
+                alert("You have not checked in today. Please check in first.");
+                return;
+            }
 
-        // Convert system time to real IST time
-        function getISTDate() {
-            const now = new Date();
+            /* ----------------------------------------------------
+               2️⃣ FIRST LOG OF THE DAY → ALLOW ONLY TODAY
+            -----------------------------------------------------*/
+            if (restrict_time === "ALLOW") {
+                startInput.disabled = false;
+                endInput.disabled = false;
 
-            // Convert to IST manually
-            const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-            return new Date(utc + (330 * 60000)); // 330 mins = 5.5 hours
+                // restrict only to today's date range
+                applyTodayMinMax(startInput);
+                applyTodayMinMax(endInput);
+
+                console.log("First log → allowed for today only.");
+                return;
+            }
+
+            /* ----------------------------------------------------
+               3️⃣ RESTRICT BASED ON LAST PROJECT'S END TIME
+            -----------------------------------------------------*/
+            if (!restrict_time || restrict_time === "" || restrict_time === "0") {
+                // No valid tracking time
+                startInput.disabled = true;
+                endInput.disabled = true;
+                alert("Previous project’s time missing.");
+                return;
+            }
+
+            startInput.disabled = false;
+            endInput.disabled = false;
+
+            // convert restrict time to date
+            let lastEnd = new Date(restrict_time);
+
+            // add 1 minute
+            lastEnd.setMinutes(lastEnd.getMinutes() + 1);
+
+            // convert to datetime-local compatible format
+            let minAllowed = toLocalInputFormat(lastEnd);
+
+            // apply dynamic restriction
+            startInput.min = minAllowed;
+            endInput.min = minAllowed;
+
+            // limit to today also
+            applyTodayMinMax(startInput);
+            applyTodayMinMax(endInput);
+
+            // ensure min stays after restrict_time
+            if (startInput.min < minAllowed) startInput.min = minAllowed;
+            if (endInput.min < minAllowed) endInput.min = minAllowed;
+
+            console.log("Allowed from:", startInput.min);
         }
 
-        // Convert Date → YYYY-MM-DDTHH:MM (local format, not UTC!)
+        /* ----------------------------------------------------
+           END TIME MUST BE > START TIME
+        -----------------------------------------------------*/
+        document.getElementById("endTime").addEventListener("change", () => {
+            let start = document.getElementById("startTime").value;
+            let end = document.getElementById("endTime").value;
+
+            if (!start) {
+                alert("Select Start Time first!");
+                document.getElementById("endTime").value = "";
+                return;
+            }
+
+            let startDate = new Date(start);
+            let endDate = new Date(end);
+
+            // Current IST Time
+            const now = getISTDate();
+
+            // ❌ Condition 1: End time < Start time
+            if (endDate < startDate) {
+                alert("End Time cannot be earlier than Start Time.");
+                document.getElementById("endTime").value = "";
+                return;
+            }
+
+            // ❌ Condition 2: End time > Current IST time
+            if (endDate > now) {
+                alert("End Time cannot be greater than the current time.");
+                document.getElementById("endTime").value = "";
+                return;
+            }
+        });
+
+        /* ----------------------------------------------------
+           APPLY ONLY TODAY RANGE (min & max)
+        -----------------------------------------------------*/
+        function applyTodayMinMax(input) {
+            const now = getISTDate();
+            const y = now.getFullYear();
+            const m = String(now.getMonth() + 1).padStart(2, "0");
+            const d = String(now.getDate()).padStart(2, "0");
+
+            input.min = `${y}-${m}-${d}T00:00`;
+            input.max = `${y}-${m}-${d}T23:59`;
+        }
+
+        /* ----------------------------------------------------
+           GET IST DATE
+        -----------------------------------------------------*/
+        function getISTDate() {
+            const now = new Date();
+            const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+            return new Date(utc + 330 * 60000);
+        }
+
+
+
+
+
+        /* ----------------------------------------------------
+           FORMAT FOR datetime-local
+        -----------------------------------------------------*/
         function toLocalInputFormat(dateObj) {
             const pad = (n) => n.toString().padStart(2, "0");
 
-            const year = dateObj.getFullYear();
-            const month = pad(dateObj.getMonth() + 1);
-            const day = pad(dateObj.getDate());
-            const hour = pad(dateObj.getHours());
-            const minute = pad(dateObj.getMinutes());
-
-            return `${year}-${month}-${day}T${hour}:${minute}`;
+            return (
+                dateObj.getFullYear() +
+                "-" +
+                pad(dateObj.getMonth() + 1) +
+                "-" +
+                pad(dateObj.getDate()) +
+                "T" +
+                pad(dateObj.getHours()) +
+                ":" +
+                pad(dateObj.getMinutes())
+            );
         }
 
+        /* ----------------------------------------------------
+           SET NOW BUTTON
+        -----------------------------------------------------*/
         function setNow(inputId) {
             const input = document.getElementById(inputId);
             const istNow = getISTDate();
-
-            restrictToToday(inputId);
-
+            applyTodayMinMax(input); // keep only today's date allowed
             input.value = toLocalInputFormat(istNow);
         }
 
-        function restrictToToday(inputId) {
-            const input = document.getElementById(inputId);
-            const istNow = getISTDate();
+        /* ----------------------------------------------------
+           INITIALIZE ON PAGE LOAD
+        -----------------------------------------------------*/
+        window.onload = function () {
+            applyTodayMinMax(document.getElementById("startTime"));
+            applyTodayMinMax(document.getElementById("endTime"));
+        };
 
-            const year = istNow.getFullYear();
-            const month = String(istNow.getMonth() + 1).padStart(2, "0");
-            const day = String(istNow.getDate()).padStart(2, "0");
 
-            const todayStart = `${year}-${month}-${day}T00:00`;
-            const todayEnd = `${year}-${month}-${day}T23:59`;
 
-            input.min = todayStart;
-            input.max = todayEnd;
-        }
 
         function formatDate(dateString) {
             const options = {
@@ -1599,6 +1853,72 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
 
             fetch_attendance(value);
         });
+
+
+        //  counter 
+        // Values from PHP
+        const CHECK_IN_TIME = "<?php echo $checkInTime; ?>";      // Example: 2025-01-10 10:22:00
+        const CHECK_OUT = "<?php echo $checkOut; ?>";             // "Y" or ""
+        const CHECK_OUT_TIME = "<?php echo $checkOutTime; ?>";    // Example: 2025-01-10 18:10:00
+
+        function startWorkingCounter(startTime) {
+
+            const displayEl = document.getElementById("total_working_display");
+
+            // If no check-in time
+            if (!startTime || startTime === "0" || startTime === "" || startTime === "null") {
+                displayEl.textContent = "00 : 00 : 00";
+                return;
+            }
+
+            // If already checked out → show static final duration
+            if (CHECK_OUT === "Y" && CHECK_OUT_TIME) {
+                displayEl.textContent = calculateWorkedTime(startTime, CHECK_OUT_TIME);
+                return;
+            }
+
+            const startTimestamp = new Date(startTime).getTime();
+
+            function updateCounter() {
+
+                // STOP LIVE COUNTER if user checked out
+                if (CHECK_OUT === "Y") return;
+
+                let now = Date.now();
+                let diff = now - startTimestamp;  // milliseconds difference
+
+                displayEl.textContent = formatTimeMs(diff);
+            }
+
+            updateCounter();                     // Run immediately
+            setInterval(updateCounter, 1000);    // Update every second
+        }
+
+        // Convert milliseconds → HH:MM:SS
+        function formatTimeMs(ms) {
+            let seconds = Math.floor(ms / 1000);
+            let hrs = Math.floor(seconds / 3600);
+            seconds %= 3600;
+            console.log('ms', ms);
+            let mins = Math.floor(seconds / 60);
+            seconds = seconds % 60;
+
+            return `${String(hrs).padStart(2, '0')} : ${String(mins).padStart(2, '0')} : ${String(seconds).padStart(2, '0')}`;
+        }
+
+        // Calculate exact worked time between two timestamps
+        function calculateWorkedTime(start, end) {
+            if (!end) return "00 : 00 : 00";
+            console.log(start, end);
+            const diff = new Date(end).getTime() - new Date(start).getTime();
+            return formatTimeMs(diff);
+        }
+
+        // Start counter
+        startWorkingCounter(CHECK_IN_TIME);
+
+
+
     </script>
 </body>
 

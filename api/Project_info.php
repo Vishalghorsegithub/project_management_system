@@ -553,6 +553,111 @@ class project_info
 
 
 
+    public function fetch_projects_spend_time($project_id)
+    {
+        session_start();
+
+        $user_id = $_SESSION["user"]["user_id"] ?? 0;
+
+        if ($user_id == 0) {
+            return [
+                "status" => false,
+                "message" => "Unauthorized"
+            ];
+        }
+
+        if (empty($project_id)) {
+            return [
+                "status" => false,
+                "message" => "Project not selected"
+            ];
+        }
+
+        // ---- 1️⃣ GET TOTAL SPEND TIME ----
+        $sql = "
+        SELECT SUM(TIMESTAMPDIFF(MINUTE, start_time, end_time)) AS total_minutes
+        FROM tbl_projects_tracking
+        WHERE user_id = '$user_id'
+        AND project_id = '$project_id'
+    ";
+
+        $res = $this->conn->query($sql);
+        $row = $res->fetch_assoc();
+
+        $totalMinutes = intval($row["total_minutes"] ?? 0);
+
+        // Format time
+        $hours = floor($totalMinutes / 60);
+        $minutes = $totalMinutes % 60;
+
+        $days = floor($hours / 8);
+        $remainingHours = $hours % 8;
+
+        if ($days > 0) {
+            $formatted = "{$days} day" . ($days > 1 ? "s" : "");
+            if ($remainingHours > 0)
+                $formatted .= " {$remainingHours}h";
+            if ($minutes > 0)
+                $formatted .= " {$minutes}m";
+        } else {
+            $formatted = "{$hours}h {$minutes}m";
+        }
+
+        // ---- 2️⃣ GET RESTRICT TIME (LAST END TIME OF TODAY) ----
+        $sql1 = "
+        SELECT 
+    CASE
+        -- 1️⃣ Not checked in today → block
+        WHEN NOT EXISTS (
+            SELECT 1 
+            FROM tbl_attendance 
+            WHERE user_id = '$user_id' 
+            AND date = CURDATE()
+        )
+        THEN 'NOT_CHECKED_IN'
+
+        -- 2️⃣ Checked in today and NO project logged → return check-in time
+        WHEN NOT EXISTS (
+            SELECT 1
+            FROM tbl_projects_tracking
+            WHERE user_id = '$user_id'
+            AND DATE(created_date) = CURDATE()
+        )
+        THEN (
+            SELECT check_in 
+            FROM tbl_attendance
+            WHERE user_id = '$user_id'
+            AND date = CURDATE()
+            LIMIT 1
+        )
+
+        -- 3️⃣ Tracking exists → return last end time
+        ELSE (
+            SELECT MAX(end_time)
+            FROM tbl_projects_tracking
+            WHERE user_id = '$user_id'
+            AND DATE(created_date) = CURDATE()
+        )
+    END AS restrict_time;
+
+    ";
+
+        $res1 = $this->conn->query($sql1);
+        $row1 = $res1->fetch_assoc();
+
+        // Keep datetime as string
+        $restrict_time = $row1["restrict_time"] ?? "";
+
+        // ---- 3️⃣ RETURN RESPONSE ----
+        return [
+            "status" => true,
+            "project_id" => $project_id,
+            "duration" => $formatted,
+            "restrict_time" => $restrict_time
+        ];
+    }
+
+
 
 
 

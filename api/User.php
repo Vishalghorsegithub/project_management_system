@@ -68,8 +68,27 @@ class User
             ];
         }
 
+
+      
+
+
+
+
         // Save user session
         session_start();
+
+
+        $session_lifetime = 6 * 60 * 60; // 6 hours in seconds
+
+        ini_set('session.gc_maxlifetime', $session_lifetime);
+        ini_set('session.cookie_lifetime', $session_lifetime);
+
+        session_set_cookie_params($session_lifetime);
+
+
+        $_SESSION["created_at"] = time();
+        $_SESSION["session_lifetime"] = $session_lifetime;
+
 
         $_SESSION["user"] = [
             "user_id" => $user['user_id'],
@@ -79,7 +98,10 @@ class User
             "role" => $user['role'],
             "day_minutes" => $company_data['total_minutes'], // total shift minutes
             "checked_in" => !empty($user["check_in"]) ? "Y" : "N",
-            "checked_out" => !empty($user["check_out"]) ? "Y" : "N"
+            "checked_out" => !empty($user["check_out"]) ? "Y" : "N",
+            "checked_in_time" => !empty($user["check_in"]) ? $user["check_in"] : "",
+            "checked_out_time" => !empty($user["check_out"]) ? $user["check_out"] : ""
+
         ];
 
         // Decide redirect
@@ -154,136 +176,7 @@ class User
     }
 
 
-    public function check_in($lat, $long)
-    {
-        session_start();
-        $user_id = $_SESSION["user"]["user_id"] ?? 0;
-
-        if ($user_id == 0) {
-            return [
-                "status" => false,
-                "message" => "Unauthorized User"
-            ];
-        }
-
-
-        $user_lat = $lat ?? null;
-        $user_long = $long ?? null;
-
-
-        if (!$user_lat || !$user_long) {
-            return [
-                "status" => false,
-                "message" => "Location (lat/long) required for check-in"
-            ];
-        }
-
-        // 1️⃣ Prevent double check-in same day
-        $checkSql = "SELECT id FROM tbl_attendance 
-                 WHERE user_id = '$user_id' AND date = CURDATE() LIMIT 1";
-        $checkRes = $this->conn->query($checkSql);
-
-        if ($checkRes->num_rows > 0) {
-            return [
-                "status" => false,
-                "message" => "Already checked in today"
-            ];
-        }
-
-        // 2️⃣ Fetch company settings
-        $sql_company = "SELECT * FROM tbl_company_information LIMIT 1";
-        $companyRes = $this->conn->query($sql_company);
-
-        if (!$companyRes || $companyRes->num_rows == 0) {
-            return [
-                "status" => false,
-                "message" => "Company settings missing"
-            ];
-        }
-
-        $company = $companyRes->fetch_assoc();
-
-        // Company GPS
-        $company_lat = $company['lat'];
-        $company_long = $company['long'];
-
-        // 3️⃣ Calculate Distance (Haversine Formula)
-        $distance = $this->calculate_distance($user_lat, $user_long, $company_lat, $company_long);
-
-        if ($distance > 100) { // more than 100 meters  $distance > 100
-            return [
-                "status" => false,
-                "message" => "You must be within 100 meters of the office to check in",
-                "distance_in_meters" => round($distance)
-            ];
-        }
-
-        // 4️⃣ Time status (Present / Late)
-        $company_start_time = date("H:i:s", strtotime($company['open_time']));
-        $current_time = date("H:i:s");
-        $grace_period_time = date("H:i:s", strtotime($company_start_time . " + {$company['grace_period_mins']} minutes"));
-
-        if ($current_time <= $grace_period_time) {
-            $status = "Present";
-        } else {
-            $status = "Late";
-        }
-
-        // 5️⃣ Insert Attendance
-        $sql = "INSERT INTO tbl_attendance (user_id, date, check_in, status)
-            VALUES ('$user_id', CURDATE(), NOW(), '$status')";
-
-        if ($this->conn->query($sql)) {
-
-            $_SESSION["user"]["checked_in"] = "Y";
-
-            return [
-                "status" => true,
-                "message" => "Check-in successful",
-                "attendance_status" => $status,
-                "distance_in_meters" => round($distance)
-            ];
-        }
-
-        return [
-            "status" => false,
-            "message" => "Failed to check in",
-            "error" => $this->conn->error
-        ];
-    }
-
-
-    private function calculate_distance($lat1, $lon1, $lat2, $lon2)
-    {
-        // Validate input
-        if (!is_numeric($lat1) || !is_numeric($lon1) || !is_numeric($lat2) || !is_numeric($lon2)) {
-            return 999999999; // Fail-safe (invalid coordinates)
-        }
-
-        $earth_radius = 6371000; // meters
-
-        // Convert degrees → radians ONCE
-        $lat1_rad = deg2rad($lat1);
-        $lon1_rad = deg2rad($lon1);
-        $lat2_rad = deg2rad($lat2);
-        $lon2_rad = deg2rad($lon2);
-
-        // Differences
-        $dLat = $lat2_rad - $lat1_rad;
-        $dLon = $lon2_rad - $lon1_rad;
-
-        // Haversine formula
-        $a = sin($dLat / 2) * sin($dLat / 2)
-            + cos($lat1_rad) * cos($lat2_rad)
-            * sin($dLon / 2) * sin($dLon / 2);
-
-        $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
-
-        return $earth_radius * $c; // distance in meters
-    }
-
-
-    public function check_out($lat, $long)
+    public function check_in()
     {
         if (session_status() === PHP_SESSION_NONE) {
             session_start();
@@ -295,48 +188,62 @@ class User
             return ["status" => false, "message" => "Unauthorized User"];
         }
 
-        // -----------------------------------------------------
-        // 1️⃣ COMPANY INFO
-        // -----------------------------------------------------
-        $companySql = "SELECT 
-                        `lat` AS latitude, 
-                        `long` AS longitude,
-                        open_time, 
-                        close_time, 
-                        grace_period_mins 
-                   FROM tbl_company_information 
-                   LIMIT 1";
+        // Prevent double check-in
+        $checkSql = "SELECT id FROM tbl_attendance 
+                 WHERE user_id = '$user_id' AND date = CURDATE() LIMIT 1";
 
-        $companyRes = $this->conn->query($companySql);
-        $company = $companyRes->fetch_assoc();
+        $checkRes = $this->conn->query($checkSql);
 
-        $company_lat = floatval($company["latitude"]);
-        $company_lng = floatval($company["longitude"]);
-        $company_open = $company["open_time"];
-        $company_close = $company["close_time"];
-        $grace_minutes = intval($company["grace_period_mins"]);
+        if ($checkRes->num_rows > 0) {
+            return ["status" => false, "message" => "Already checked in today"];
+        }
 
-        // -----------------------------------------------------
-        // 2️⃣ GPS CHECK (100 meters)
-        // -----------------------------------------------------
-        $distance = $this->calculate_distance($lat, $long, $company_lat, $company_lng);
+        // Insert attendance
+        $sql = "INSERT INTO tbl_attendance (user_id, date, check_in, status)
+            VALUES ('$user_id', CURDATE(), NOW(), '')";
 
-        if ($distance > 100) {
+        if ($this->conn->query($sql)) {
+
+            $lastId = $this->conn->insert_id;
+
+            $getSql = "SELECT check_in FROM tbl_attendance WHERE id='$lastId' LIMIT 1";
+            $row = $this->conn->query($getSql)->fetch_assoc();
+
+            $check_in_time = $row["check_in"];
+
+            $_SESSION["user"]["checked_in"] = "Y";
+            $_SESSION["user"]["checked_in_time"] = $check_in_time;
+            $_SESSION["user"]["checked_out"] = "N";  // reset
+
             return [
-                "status" => false,
-                "message" => "You must be within 100 meters of the office to check out.",
-                "distance" => round($distance, 2) . " meters"
+                "status" => true,
+                "message" => "Check-in successful",
+                "check_in_time" => $check_in_time
             ];
         }
 
-        // -----------------------------------------------------
-        // 3️⃣ ATTENDANCE CHECK
-        // -----------------------------------------------------
-        $checkSql = "SELECT id, check_in 
-                 FROM tbl_attendance 
-                 WHERE user_id='$user_id' 
-                 AND date = CURDATE() 
-                 LIMIT 1";
+        return [
+            "status" => false,
+            "message" => "Failed to check in",
+            "error" => $this->conn->error
+        ];
+    }
+
+    public function check_out()
+    {
+        if (session_status() === PHP_SESSION_NONE) {
+            session_start();
+        }
+
+        $user_id = $_SESSION["user"]["user_id"] ?? 0;
+
+        if ($user_id == 0) {
+            return ["status" => false, "message" => "Unauthorized User"];
+        }
+
+        // Fetch today's attendance
+        $checkSql = "SELECT id, check_in FROM tbl_attendance 
+                 WHERE user_id='$user_id' AND date = CURDATE() LIMIT 1";
 
         $checkRes = $this->conn->query($checkSql);
 
@@ -348,64 +255,35 @@ class User
         $attendanceId = $attendance["id"];
         $checkInTime = $attendance["check_in"];
 
-        // Check if already checked out
-        $alreadySql = "SELECT check_out 
-                   FROM tbl_attendance 
-                   WHERE id='$attendanceId' 
-                   LIMIT 1";
-
+        // Prevent double check-out
+        $alreadySql = "SELECT check_out FROM tbl_attendance WHERE id='$attendanceId' LIMIT 1";
         $already = $this->conn->query($alreadySql)->fetch_assoc();
 
         if (!empty($already["check_out"])) {
             return ["status" => false, "message" => "Already checked out today"];
         }
 
-        // -----------------------------------------------------
-        // 4️⃣ CALCULATE TOTAL MINUTES WORKED
-        // -----------------------------------------------------
+        // Calculate working minutes
         $minutesSql = "SELECT TIMESTAMPDIFF(MINUTE, '$checkInTime', NOW()) AS total_minutes";
-        $minRes = $this->conn->query($minutesSql);
-        $totalMinutes = intval($minRes->fetch_assoc()["total_minutes"]);
+        $row = $this->conn->query($minutesSql)->fetch_assoc();
 
+        $totalMinutes = intval($row["total_minutes"]);
         $workedHours = $totalMinutes / 60;
+
+        // Fixed values
         $requiredHours = 8;
         $halfDayHours = $requiredHours / 2;
 
-        // -----------------------------------------------------
-        // 5️⃣ ATTENDANCE TYPE LOGIC
-        // -----------------------------------------------------
-        $currentTime = date("H:i:s");
-
-        // Late cutoff = open time + grace
-        $lateCutoff = date("H:i:s", strtotime("+$grace_minutes minutes", strtotime($company_open)));
-
-        // Check if user was on time
-        $isOnTime = strtotime($checkInTime) <= strtotime($lateCutoff);
-
-        if (!$isOnTime) {
-
-            // ❌ Late → HALF DAY (even if he works full hours)
-            $finalStatus = "Half Day";
-
-        } elseif (strtotime($currentTime) >= strtotime($company_close)) {
-
-            // ✔ On-time + checkout after office close → PRESENT
+        // Determine status
+        if ($workedHours >= $requiredHours) {
             $finalStatus = "Present";
-
         } elseif ($workedHours >= $halfDayHours) {
-
-            // ✔ Worked >= half → HALF DAY
             $finalStatus = "Half Day";
-
         } else {
-
-            // ❌ Too early → Early Checkout
-            $finalStatus = "Early Checkout";
+            $finalStatus = "Early Departure";
         }
 
-        // -----------------------------------------------------
-        // 6️⃣ UPDATE RECORD
-        // -----------------------------------------------------
+        // Update record
         $updateSql = "
         UPDATE tbl_attendance 
         SET 
@@ -417,14 +295,23 @@ class User
 
         if ($this->conn->query($updateSql)) {
 
+            // Fetch updated checkout time
+            $checkOutSql = "SELECT check_out FROM tbl_attendance WHERE id='$attendanceId' LIMIT 1";
+            $row = $this->conn->query($checkOutSql)->fetch_assoc();
+
+            $checkOutTime = $row["check_out"];
+
+            // Update session
             $_SESSION["user"]["checked_out"] = "Y";
+            $_SESSION["user"]["checked_out_time"] = $checkOutTime;
             $_SESSION["user"]["total_working_minutes"] = $totalMinutes;
 
             return [
                 "status" => true,
                 "message" => "Check-out successful",
                 "status_today" => $finalStatus,
-                "worked_minutes" => $totalMinutes
+                "worked_minutes" => $totalMinutes,
+                "check_out_time" => $checkOutTime
             ];
         }
 
@@ -434,7 +321,6 @@ class User
             "error" => $this->conn->error
         ];
     }
-
 
 
 

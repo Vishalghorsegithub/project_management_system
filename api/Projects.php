@@ -99,6 +99,15 @@ try {
         send_json($response);
     }
 
+
+    if ($function === "fetch_projects_spend_time") {
+        $project_id = $data["project_id"] ?? "";
+        $response = $project->fetch_projects_spend_time($project_id);
+        send_json($response);
+    }
+
+    
+
     // If invalid function
     send_json([
         "status"  => false,

@@ -252,15 +252,7 @@
 
             <button type="submit" class="btn btn-custom-primary">Log In</button>
         </form>
-
-
-
-
-
-
     </div>
-
-
 
 
     <!-- Custom Message Modal -->

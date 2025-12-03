@@ -6,6 +6,41 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
     header("Location: login.php");
     exit;
 }
+
+
+
+
+
+
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// no user = not logged in
+if (empty($_SESSION["user"])) {
+    // redirect to login or return unauthorized
+    header("Location: login.php");
+    exit;
+}
+
+// check custom timeout
+$createdAt = $_SESSION["created_at"] ?? 0;
+$lifetime = $_SESSION["session_lifetime"] ?? (6 * 60 * 60);
+
+if (time() - $createdAt > $lifetime) {
+    // session expired: clear and destroy
+    session_unset();
+    session_destroy();
+    // redirect to login
+    header("Location: login.php");
+    exit;
+}
+
+
+
+
+
 ?>
 
 <!DOCTYPE html>
@@ -290,7 +325,7 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
                         <div id="btnSpinner" class="spinner-border spinner-border-sm ms-2 d-none"></div>
                     </button>
 
-                   
+
 
                 </div>
 
@@ -302,7 +337,7 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
     </div>
 
     <!-- Bootstrap JS -->
-     <script src="assets/bootstrap.bundle.min.js"></script>
+    <script src="assets/bootstrap.bundle.min.js"></script>
     <script>
 
 
@@ -458,7 +493,7 @@ if (!isset($_SESSION['user']) || empty($_SESSION['user']['user_id'])) {
             msgBox.classList.remove("d-none");
         }
 
-           function log_out() {
+        function log_out() {
 
             if (confirm("Are you sure you want to logout?")) {
                 fetch("api/login.php", {
